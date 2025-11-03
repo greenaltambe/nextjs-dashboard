@@ -1,5 +1,24 @@
-// This file contains placeholder data that you'll be replacing with real data in the Data Fetching chapter:
-// https://nextjs.org/learn/dashboard-app/fetching-data
+// manual_seed.js
+import postgres from "postgres";
+import bcrypt from "bcryptjs";
+import dotenv from "dotenv";
+dotenv.config();
+
+const DATABASE_URL =
+	process.env.storage_POSTGRES_URL ||
+	process.env.storage_POSTGRES_URL_NON_POOLING;
+if (!DATABASE_URL) {
+	console.error("Set storage_POSTGRES_URL in your environment.");
+	process.exit(1);
+}
+
+// For Supabase/pgbouncer: do NOT use node-postgres pooling here, postgres lib is fine.
+// Provide ssl: { rejectUnauthorized: false } to avoid cert issues with some providers.
+const sql = postgres(DATABASE_URL, {
+	ssl: { rejectUnauthorized: false },
+	// You can tune max connections etc. if needed
+});
+
 const users = [
 	{
 		id: "410544b2-4001-4271-9855-fec4b6a6442a",
@@ -144,4 +163,83 @@ const revenue = [
 	{ month: "Dec", revenue: 4800 },
 ];
 
-export { users, customers, invoices, revenue };
+async function seed() {
+	await sql`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`;
+
+	await sql`
+    CREATE TABLE IF NOT EXISTS users (
+      id UUID PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password TEXT NOT NULL
+    );
+  `;
+	await sql`
+    CREATE TABLE IF NOT EXISTS customers (
+      id UUID PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL,
+      image_url VARCHAR(255) NOT NULL
+    );
+  `;
+	await sql`
+    CREATE TABLE IF NOT EXISTS invoices (
+      id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+      customer_id UUID NOT NULL,
+      amount INT NOT NULL,
+      status VARCHAR(255) NOT NULL,
+      date DATE NOT NULL
+    );
+  `;
+	await sql`
+    CREATE TABLE IF NOT EXISTS revenue (
+      month VARCHAR(4) NOT NULL UNIQUE,
+      revenue INT NOT NULL
+    );
+  `;
+
+	// users
+	for (const u of users) {
+		const hash = await bcrypt.hash(u.password, 10);
+		await sql`
+      INSERT INTO users (id, name, email, password)
+      VALUES (${u.id}, ${u.name}, ${u.email}, ${hash})
+      ON CONFLICT (id) DO NOTHING;
+    `;
+	}
+
+	// customers
+	for (const c of customers) {
+		await sql`
+      INSERT INTO customers (id, name, email, image_url)
+      VALUES (${c.id}, ${c.name}, ${c.email}, ${c.image_url})
+      ON CONFLICT (id) DO NOTHING;
+    `;
+	}
+
+	// invoices
+	for (const inv of invoices) {
+		await sql`
+      INSERT INTO invoices (customer_id, amount, status, date)
+      VALUES (${inv.customer_id}, ${inv.amount}, ${inv.status}, ${inv.date})
+      ON CONFLICT DO NOTHING;
+    `;
+	}
+
+	// revenue
+	for (const r of revenue) {
+		await sql`
+      INSERT INTO revenue (month, revenue)
+      VALUES (${r.month}, ${r.revenue})
+      ON CONFLICT (month) DO NOTHING;
+    `;
+	}
+
+	console.log("Seeding done.");
+	await sql.end({ timeout: 1000 }); // close connection
+}
+
+seed().catch((err) => {
+	console.error("Seeding failed:", err);
+	process.exit(1);
+});
